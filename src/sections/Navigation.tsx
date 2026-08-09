@@ -100,34 +100,37 @@ export default function NavigationSection() {
       const r = await fetchRoute(from, to);
 
       // 1. User-reported incidents (live, realtime-subscribed).
+      // Only show incidents that are near the route road (within 1.5 km of any
+      // route point) OR within the destination area (within 2 km of destination).
       const incidentHazards: HazardAlongRoute[] = [];
       for (const inc of incidents) {
+        const incPos = { lat: inc.latitude, lng: inc.longitude };
+        const destDist = haversineKm(incPos, to);
+        let nearRoute = false;
         for (const point of r.geometry) {
-          const d = haversineKm(
-            { lat: inc.latitude, lng: inc.longitude },
-            { lat: point[0], lng: point[1] },
-          );
-          if (d < 2) {
-            const offsetKm = haversineKm(from, { lat: inc.latitude, lng: inc.longitude });
-            incidentHazards.push({
-              latitude: inc.latitude,
-              longitude: inc.longitude,
-              type: inc.type,
-              severity: inc.severity,
-              description: inc.description ?? inc.type,
-              offsetKm,
-              source: 'incident',
-            });
+          if (haversineKm(incPos, { lat: point[0], lng: point[1] }) < 1.5) {
+            nearRoute = true;
             break;
           }
         }
+        if (!nearRoute && destDist >= 2) continue;
+        const offsetKm = haversineKm(from, incPos);
+        incidentHazards.push({
+          latitude: inc.latitude,
+          longitude: inc.longitude,
+          type: inc.type,
+          severity: inc.severity,
+          description: inc.description ?? inc.type,
+          offsetKm,
+          source: 'incident',
+        });
       }
 
       // 2. Live road hazards from OpenStreetMap (closures, construction, barriers, landslide/flood zones).
       // 3. Live weather hazards along the route (heavy rain, storms, fog, high winds).
       const [osmHazards, weatherHazards] = await Promise.all([
         fetchRoadHazards(r.geometry, from, to).catch(() => [] as HazardAlongRoute[]),
-        fetchWeatherHazards(r.geometry, from).catch(() => [] as HazardAlongRoute[]),
+        fetchWeatherHazards(r.geometry, from, to).catch(() => [] as HazardAlongRoute[]),
       ]);
 
       const all = [...incidentHazards, ...osmHazards, ...weatherHazards].sort(

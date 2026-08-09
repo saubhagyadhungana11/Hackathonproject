@@ -312,7 +312,7 @@ export async function fetchRoadHazards(
       clearTimeout(timeout);
       if (res.status === 429 || res.status === 504 || !res.ok) continue;
       const data = await res.json();
-      return mapOsmHazards(data.elements as any[], geometry);
+      return mapOsmHazards(data.elements as any[], geometry, to);
     } catch {
       continue;
     }
@@ -323,7 +323,10 @@ export async function fetchRoadHazards(
 function mapOsmHazards(
   elements: any[],
   geometry: [number, number][],
+  to: { lat: number; lng: number },
 ): HazardAlongRoute[] {
+  const DEST_RADIUS_KM = 2;
+  const ROUTE_RADIUS_KM = 1.5;
   const hazards: HazardAlongRoute[] = [];
   for (const el of elements) {
     const elLat = el.lat ?? el.center?.lat;
@@ -367,7 +370,8 @@ function mapOsmHazards(
       description = tags.description || tags.name || 'Potential road obstruction';
     }
 
-    // Only include if within 1.5 km of any route point.
+    // Include if within 1.5 km of any route point (near the road) OR
+    // within 2 km of the destination (at the destination area).
     let minDist = Infinity;
     let offsetKm = 0;
     for (const point of geometry) {
@@ -377,7 +381,8 @@ function mapOsmHazards(
         offsetKm = d;
       }
     }
-    if (minDist < 1.5) {
+    const destDist = haversineKm({ lat: elLat, lng: elLng }, to);
+    if (minDist < ROUTE_RADIUS_KM || destDist < DEST_RADIUS_KM) {
       hazards.push({
         latitude: elLat,
         longitude: elLng,
@@ -405,6 +410,7 @@ function mapOsmHazards(
 export async function fetchWeatherHazards(
   geometry: [number, number][],
   from: { lat: number; lng: number },
+  to?: { lat: number; lng: number },
 ): Promise<HazardAlongRoute[]> {
   if (geometry.length === 0) return [];
   const sampleCount = Math.min(5, geometry.length);
@@ -417,6 +423,15 @@ export async function fetchWeatherHazards(
     if (prev) cumulativeKm += haversineKm(prev, { lat: pt[0], lng: pt[1] });
     samplePoints.push({ lat: pt[0], lng: pt[1], offsetKm: cumulativeKm });
     prev = { lat: pt[0], lng: pt[1] };
+  }
+  // Always sample weather at the destination so hazards there are detected.
+  if (to) {
+    const last = geometry[geometry.length - 1];
+    const destOffset = cumulativeKm + haversineKm(
+      { lat: last[0], lng: last[1] },
+      to,
+    );
+    samplePoints.push({ lat: to.lat, lng: to.lng, offsetKm: destOffset });
   }
 
   const hazards: HazardAlongRoute[] = [];
